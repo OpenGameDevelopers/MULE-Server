@@ -4,6 +4,10 @@
 #include <X11/Xlib.h>
 #include <RenderView.hpp>
 #include <list>
+#include <GL/gl.h>
+#include <GL/glx.h>
+#include <GL/glxext.h>
+#include <GL/glext.h>
 
 class VirtualWindow
 {
@@ -19,8 +23,10 @@ public:
 	int AddView( RenderView &p_View );
 
 private:
-	Display	*m_pDisplay;
-	Window	m_Window;
+	Display		*m_pDisplay;
+	Window		m_Window;
+	GLXFBConfig	m_GLXFBConfig;
+	XVisualInfo	*m_pXVisualInfo;
 
 	std::list< RenderView* > m_Views;
 };
