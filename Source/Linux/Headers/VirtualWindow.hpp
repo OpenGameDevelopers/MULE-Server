@@ -12,6 +12,7 @@ public:
 	~VirtualWindow( );
 
 	int Initialise( );
+	void Destroy( );
 
 	void ProcessEvents( );
 
@@ -19,7 +20,7 @@ public:
 
 private:
 	Display	*m_pDisplay;
-	Window	*m_Window;
+	Window	m_Window;
 
 	std::list< RenderView* > m_Views;
 };
