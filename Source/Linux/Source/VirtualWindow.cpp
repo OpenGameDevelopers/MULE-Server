@@ -23,7 +23,6 @@ int VirtualWindow::Initialise( )
 
 	while( ( pEntry = readdir( pXDir ) ) != NULL )
 	{
-		std::cout << "/tmp/.X11-unix/" << pEntry->d_name << std::endl;
 		if( pEntry->d_name[ 0 ] == 'X' )
 		{
 			break;
@@ -110,6 +109,21 @@ int VirtualWindow::Initialise( )
 		True );
 
 	glXMakeCurrent( m_pDisplay, m_Window, TestContext );
+
+	char *pGLVersion = ( char * )glGetString( GL_VERSION );
+
+	std::cout << "OpenGL version [string]: " << pGLVersion << std::endl;
+
+	char *pTokenVersion = strtok( pGLVersion, " ." );
+
+	for( int i = 0; i < 2; ++i )
+	{
+		m_GLVersion[ i ] = atoi( pTokenVersion );
+		pTokenVersion = strtok( NULL, ". " );
+	}
+
+	std::cout << "OpenGL version [decimal]: " << m_GLVersion[ 0 ] << "." <<
+		m_GLVersion[ 1 ] << std::endl;
 
 	glXMakeCurrent( m_pDisplay, 0, 0 );
 	glXDestroyContext( m_pDisplay, TestContext );

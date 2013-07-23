@@ -27,6 +27,8 @@ private:
 	Window		m_Window;
 	GLXFBConfig	m_GLXFBConfig;
 	XVisualInfo	*m_pXVisualInfo;
+	GLXContext	m_GLXContext;
+	GLint		m_GLVersion[ 2 ];
 
 	std::list< RenderView* > m_Views;
 };
