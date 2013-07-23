@@ -99,6 +99,7 @@ int VirtualWindow::Initialise( )
 		EnterWindowMask | LeaveWindowMask;
 	WindowAttributes.override_redirect = True;
 
+	// The window size does not matter, as it will not be shown
 	m_Window = XCreateWindow( m_pDisplay,
 		RootWindow( m_pDisplay, m_pXVisualInfo->screen ), 0, 0, 100, 100, 0,
 		m_pXVisualInfo->depth, InputOutput, m_pXVisualInfo->visual,
@@ -131,7 +132,7 @@ int VirtualWindow::Initialise( )
 	if( ( m_GLVersion[ 0 ] < 3 ) ||
 		( m_GLVersion[ 0 ] == 3 && m_GLVersion[ 1 ] < 2 ) )
 	{
-		std::cout << "Failed to create an OpenGL 3.2 or greater context " <<
+		std::cout << "Failed to create an OpenGL 3.2 or greater context" <<
 			std::endl;
 		return 0;
 	}
