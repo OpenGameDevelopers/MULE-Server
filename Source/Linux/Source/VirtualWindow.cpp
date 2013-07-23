@@ -124,9 +124,17 @@ int VirtualWindow::Initialise( )
 
 	std::cout << "OpenGL version [decimal]: " << m_GLVersion[ 0 ] << "." <<
 		m_GLVersion[ 1 ] << std::endl;
-
+	
 	glXMakeCurrent( m_pDisplay, 0, 0 );
 	glXDestroyContext( m_pDisplay, TestContext );
+
+	if( ( m_GLVersion[ 0 ] < 3 ) ||
+		( m_GLVersion[ 0 ] == 3 && m_GLVersion[ 1 ] < 2 ) )
+	{
+		std::cout << "Failed to create an OpenGL 3.2 or greater context " <<
+			std::endl;
+		return 0;
+	}
 
 	return 1;
 }
