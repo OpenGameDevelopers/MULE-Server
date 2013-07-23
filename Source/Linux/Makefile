@@ -2,10 +2,6 @@
 #                                   MULE Server Makefile [Linux x86] Ver. 1.0 #
 ###############################################################################
 
-ifeq ($(strip $(ZEDSDK)),)
-$(error Please set ZEDSDK to point to your ZED SDK root directory )
-endif
-
 ifndef TOPDIR
 export TOPDIR		:= $(shell cd ../../ && pwd)
 export TOPSRC		= $(TOPDIR)/Source
