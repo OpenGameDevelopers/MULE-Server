@@ -6,6 +6,10 @@
 class RenderView
 {
 public:
+	RenderView( );
+	~RenderView( );
+	int		Initialise( );
+	void	Update( );
 private:
 	GLint	m_ID;
 	int 	m_Width;

@@ -31,6 +31,7 @@ private:
 	GLint		m_GLVersion[ 2 ];
 
 	std::list< RenderView* > m_Views;
+	int			m_Socket;
 };
 
 #endif
