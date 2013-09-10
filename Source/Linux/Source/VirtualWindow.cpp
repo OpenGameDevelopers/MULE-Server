@@ -12,6 +12,14 @@
 
 const int MAX_BUFFER_LENGTH	= 1024;
 
+typedef struct __tagImagePacket
+{
+	int		Offset;
+	char	Data[ 1020 ];
+}ImagePacket;
+
+char g_BufferToSend[ 800*600*3 ];
+
 void *GetINetAddr( struct sockaddr *p_Addr )
 {
 	if( p_Addr->sa_family == AF_INET )
@@ -27,6 +35,7 @@ VirtualWindow::VirtualWindow( )
 	m_pDisplay = NULL;
 	m_Window = 0;
 	m_pXVisualInfo = NULL;
+	memset( g_BufferToSend, 0, 800*600*3 );
 }
 
 VirtualWindow::~VirtualWindow( )
@@ -62,7 +71,8 @@ int VirtualWindow::Initialise( )
 			continue;
 		}
 
-		if( bind( m_Socket, pAddrItr->ai_addr, pAddrItr->ai_addrlen ) == -1 )
+		if( ( bind( m_Socket, pAddrItr->ai_addr, pAddrItr->ai_addrlen ) )
+			== -1 )
 		{
 			close( m_Socket );
 			printf( "Error on binding socket\n" );
@@ -204,6 +214,27 @@ int VirtualWindow::Initialise( )
 	glClearColor( 0.4f, 0.0f, 0.0f, 1.0f );
 	glViewport( 0, 0, 800, 600 );
 
+	// Set up the buffer which will just be a vertical grey gradient
+	// The next step after this is to use the OpenGL back buffer
+	for( int r = 0; r < 800; ++r )
+	{
+		for( int i = 0; i < 600; ++i )
+		{
+			g_BufferToSend[ i+( r*800 ) ] = r%256;
+		}
+	}
+/*
+	FILE *tmp = fopen( "buffer", "wb" );
+	for( int i = 0; i < 800*600; ++i )
+	{
+		if( ( i % 800 ) == 0 )
+		{
+			fprintf( tmp, "\n" );
+		}
+		fprintf( tmp, "%02X ", g_BufferToSend[ i ] );
+	}
+	fclose( tmp );*/
+
 	return 1;
 }
 
@@ -285,26 +316,70 @@ void VirtualWindow::ProcessEvents( )
 		Buffer[ BytesRecv ] = '\0';
 		printf( "%s\n", Buffer );
 		int BufferPos = 0;
+		const int BytesLeft = BytesToGo % ( MAX_BUFFER_LENGTH-sizeof( int ) );
 
-		while( BytesToGo > 0 )
+		ImagePacket TmpPkt;
+		memset( &TmpPkt, 0, sizeof( TmpPkt ) );
+		TmpPkt.Offset = htonl( 12 );
+		int Counter = 0;
+		char ColourVal[ 3 ] = { 0x00, 0x00, 0x00 };
+
+		if( BytesLeft )
 		{
-			memset( SendBuffer, 0xFF, MAX_BUFFER_LENGTH );
-			BytesToGo -= MAX_BUFFER_LENGTH;
-			BufferPos += MAX_BUFFER_LENGTH;
+			printf( "Left: %d\n", BytesLeft );
+			memset( SendBuffer, 0x00, BytesLeft );
+			sprintf( SendBuffer, "Message No. %d", Counter );
+			BytesToGo -= BytesLeft;
+			BufferPos += BytesLeft;
 
-			printf( "Bytes to go:     %d\n", BytesToGo );
-			printf( "Buffer position: %d\n", BufferPos );
-			
-			if( ( NumBytes = sendto( m_Socket, SendBuffer,
-				MAX_BUFFER_LENGTH, 0,
-				( struct sockaddr * )&RemoteAddress, AddressLength ) ) == -1 )
+			memcpy( TmpPkt.Data, g_BufferToSend, BytesLeft );
+
+			if( ( NumBytes = sendto( m_Socket, &TmpPkt,
+				BytesLeft, 0, ( struct sockaddr * )&RemoteAddress,
+				AddressLength ) ) == -1 )
 			{
-				printf( "Failed to send data\n" );
+				printf( "Failed to send leftovers\n" );
 			}
 			else
 			{
-				printf( "Sent data\n" );
+				printf( "Leftovers sent\n" );
 			}
+			++Counter;
+			ColourVal[ 1 ] += 12;
+		}
+
+		printf( "BTG: %d\n", BytesToGo );
+
+		while( BytesToGo > 0 )
+		{
+			memset( SendBuffer, 0x00, MAX_BUFFER_LENGTH );
+			int rev = htonl( 12 );
+			memset( SendBuffer, rev, 4 );
+//			sprintf( SendBuffer, "Message No. %d", Counter );
+			BytesToGo -= ( MAX_BUFFER_LENGTH - sizeof( int ) );
+			BufferPos += ( MAX_BUFFER_LENGTH - sizeof( int ) );
+
+/*			char *pPtr = g_BufferToSend;
+			pPtr += BytesToGo+BytesLeft;*/
+
+			memcpy( TmpPkt.Data,g_BufferToSend + ( BytesToGo + BytesLeft ),
+				MAX_BUFFER_LENGTH - sizeof( int ) );
+/*
+			printf( "Bytes to go:     %d\n", BytesToGo );
+			printf( "Buffer position: %d\n", BufferPos );*/
+
+			if( ( NumBytes = sendto( m_Socket, &TmpPkt,
+				MAX_BUFFER_LENGTH, 0,
+				( struct sockaddr * )&RemoteAddress, AddressLength ) ) == -1 )
+			{
+				printf( "Failed to send data: %s\n", strerror( errno ) );
+			}
+			else
+			{
+//				printf( "Sent %d bytes\n", NumBytes );
+			}
+			ColourVal[ 0 ] += 12;
+			++Counter;
 		}
 		FramesSent++;
 		printf( "Sent %d frames\n", FramesSent );
