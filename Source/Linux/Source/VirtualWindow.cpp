@@ -4,6 +4,7 @@
 #include <cstring>
 #include <pthread.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -18,7 +19,11 @@ typedef struct __tagImagePacket
 	char	Data[ 1020 ];
 }ImagePacket;
 
-char g_BufferToSend[ 800*600*3 ];
+const int IMAGE_WIDTH		= 800;
+const int IMAGE_HEIGHT		= 600;
+const int IMAGE_CHANNELS	= 3;
+
+char g_BufferToSend[ IMAGE_WIDTH*IMAGE_HEIGHT*IMAGE_CHANNELS ];
 
 void *GetINetAddr( struct sockaddr *p_Addr )
 {
@@ -35,7 +40,7 @@ VirtualWindow::VirtualWindow( )
 	m_pDisplay = NULL;
 	m_Window = 0;
 	m_pXVisualInfo = NULL;
-	memset( g_BufferToSend, 0, 800*600*3 );
+	memset( g_BufferToSend, 0, IMAGE_WIDTH*IMAGE_HEIGHT*IMAGE_CHANNELS );
 }
 
 VirtualWindow::~VirtualWindow( )
@@ -89,6 +94,12 @@ int VirtualWindow::Initialise( )
 		printf( "Failed to create a socket to listen on\n" );
 		return 0;
 	}
+
+/*	int NonBlock = 1;
+	if( fcntl( m_Socket, F_SETFL, O_NONBLOCK, NonBlock ) == -1 )
+	{
+		printf( "Failed to set up non-blocking socket\n" );
+	}*/
 
 	// Open the /tmp/.X11-unix directory and search for files beginning with X
 	DIR *pXDir = opendir( "/tmp/.X11-unix" );
@@ -216,11 +227,11 @@ int VirtualWindow::Initialise( )
 
 	// Set up the buffer which will just be a vertical grey gradient
 	// The next step after this is to use the OpenGL back buffer
-	for( int r = 0; r < 800; ++r )
+	for( int r = 0; r < IMAGE_HEIGHT; ++r )
 	{
-		for( int i = 0; i < 600; ++i )
+		for( int i = 0; i < IMAGE_WIDTH*IMAGE_CHANNELS; ++i )
 		{
-			g_BufferToSend[ i+( r*800 ) ] = r%256;
+			g_BufferToSend[ i+( r*IMAGE_WIDTH*IMAGE_CHANNELS ) ] = ( r%256 ) & 0xFF;
 		}
 	}
 /*
@@ -277,8 +288,7 @@ void VirtualWindow::ProcessEvents( )
 	int BytesRecv;
 	int NumBytes;
 	char AddrStr[ INET6_ADDRSTRLEN ];
-	int BytesToGo = 3*800*600;
-	char SendBuffer[ 1024 ];
+	int BytesToGo = IMAGE_WIDTH*IMAGE_HEIGHT*IMAGE_CHANNELS;
 
 	int Pending = XPending( m_pDisplay );
 
@@ -322,17 +332,15 @@ void VirtualWindow::ProcessEvents( )
 		memset( &TmpPkt, 0, sizeof( TmpPkt ) );
 		TmpPkt.Offset = htonl( 12 );
 		int Counter = 0;
-		char ColourVal[ 3 ] = { 0x00, 0x00, 0x00 };
 
 		if( BytesLeft )
 		{
 			printf( "Left: %d\n", BytesLeft );
-			memset( SendBuffer, 0x00, BytesLeft );
-			sprintf( SendBuffer, "Message No. %d", Counter );
 			BytesToGo -= BytesLeft;
 			BufferPos += BytesLeft;
 
 			memcpy( TmpPkt.Data, g_BufferToSend, BytesLeft );
+			TmpPkt.Offset = htonl( 0 );
 
 			if( ( NumBytes = sendto( m_Socket, &TmpPkt,
 				BytesLeft, 0, ( struct sockaddr * )&RemoteAddress,
@@ -345,27 +353,20 @@ void VirtualWindow::ProcessEvents( )
 				printf( "Leftovers sent\n" );
 			}
 			++Counter;
-			ColourVal[ 1 ] += 12;
 		}
 
-		printf( "BTG: %d\n", BytesToGo );
+		// printf( "Bytes to go: %d\n", BytesToGo );
 
 		while( BytesToGo > 0 )
 		{
-			memset( SendBuffer, 0x00, MAX_BUFFER_LENGTH );
-			int rev = htonl( 12 );
-			memset( SendBuffer, rev, 4 );
-//			sprintf( SendBuffer, "Message No. %d", Counter );
+			TmpPkt.Offset = htonl( BufferPos );
+			memcpy( TmpPkt.Data, g_BufferToSend + BufferPos,
+				MAX_BUFFER_LENGTH - sizeof( int ) );
+
 			BytesToGo -= ( MAX_BUFFER_LENGTH - sizeof( int ) );
 			BufferPos += ( MAX_BUFFER_LENGTH - sizeof( int ) );
 
-/*			char *pPtr = g_BufferToSend;
-			pPtr += BytesToGo+BytesLeft;*/
-
-			memcpy( TmpPkt.Data,g_BufferToSend + ( BytesToGo + BytesLeft ),
-				MAX_BUFFER_LENGTH - sizeof( int ) );
-/*
-			printf( "Bytes to go:     %d\n", BytesToGo );
+			/*printf( "Bytes to go:     %d\n", BytesToGo );
 			printf( "Buffer position: %d\n", BufferPos );*/
 
 			if( ( NumBytes = sendto( m_Socket, &TmpPkt,
@@ -376,9 +377,8 @@ void VirtualWindow::ProcessEvents( )
 			}
 			else
 			{
-//				printf( "Sent %d bytes\n", NumBytes );
+				// printf( "Sent %d bytes\n", NumBytes );
 			}
-			ColourVal[ 0 ] += 12;
 			++Counter;
 		}
 		FramesSent++;
