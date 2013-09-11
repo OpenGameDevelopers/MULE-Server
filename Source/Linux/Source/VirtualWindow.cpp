@@ -15,15 +15,34 @@ const int MAX_BUFFER_LENGTH	= 1024;
 
 typedef struct __tagImagePacket
 {
+	int		BlockIndex;
 	int		Offset;
-	char	Data[ 1020 ];
+	char	Data[ 1016 ];
 }ImagePacket;
 
+typedef struct __tagColour
+{
+	char R;
+	char G;
+	char B;
+}Colour;
+
+const int PACKET_HEADER		= sizeof( int )*2;
 const int IMAGE_WIDTH		= 800;
 const int IMAGE_HEIGHT		= 600;
+// Blocks will split the image up, anything that doesn't fill in the pitch is
+// ignored
+const int BLOCK_SIZE		= 32;
 const int IMAGE_CHANNELS	= 3;
 
+const int BLOCK_COLUMNS	= IMAGE_WIDTH/BLOCK_SIZE +
+			( IMAGE_WIDTH%BLOCK_SIZE ? 1 : 0 );
+const int BLOCK_ROWS = IMAGE_HEIGHT/BLOCK_SIZE +
+			( IMAGE_HEIGHT%BLOCK_SIZE ? 1 : 0 );
+
 char g_BufferToSend[ IMAGE_WIDTH*IMAGE_HEIGHT*IMAGE_CHANNELS ];
+Colour g_Block[ BLOCK_COLUMNS * BLOCK_ROWS ]
+	[ BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS ];
 
 void *GetINetAddr( struct sockaddr *p_Addr )
 {
@@ -234,6 +253,21 @@ int VirtualWindow::Initialise( )
 			g_BufferToSend[ i+( r*IMAGE_WIDTH*IMAGE_CHANNELS ) ] = ( r%256 ) & 0xFF;
 		}
 	}
+
+	char Scale = 0;
+	for( int Row = 0; Row < BLOCK_ROWS; ++Row )
+	{
+		for( int Col = 0; Col < BLOCK_COLUMNS; ++Col )
+		{
+			for( int i = 0; i < BLOCK_SIZE*BLOCK_SIZE; ++i )
+			{
+				g_Block[ Row*Col ][ i ].R = 0xFF;//Scale;
+				g_Block[ Row*Col ][ i ].G = 0xFF;//Scale;
+				g_Block[ Row*Col ][ i ].B = 0xFF;// Scale;
+			}
+		}
+		++Scale;
+	}
 /*
 	FILE *tmp = fopen( "buffer", "wb" );
 	for( int i = 0; i < 800*600; ++i )
@@ -325,13 +359,23 @@ void VirtualWindow::ProcessEvents( )
 		printf( "Packet [%d bytes]:\n", BytesRecv );
 		Buffer[ BytesRecv ] = '\0';
 		printf( "%s\n", Buffer );
+		
+		printf( "Bytes per block: %d\n",
+			BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS );
+		printf( "%d packets of size %d\n",
+			( BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS ) /
+				( sizeof( ImagePacket )-PACKET_HEADER ),
+				sizeof( ImagePacket )-PACKET_HEADER);
+		printf( "One packet of size %d\n",
+			( BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS ) %
+				( sizeof( ImagePacket )-PACKET_HEADER ) );
+		/*
 		int BufferPos = 0;
 		const int BytesLeft = BytesToGo % ( MAX_BUFFER_LENGTH-sizeof( int ) );
 
 		ImagePacket TmpPkt;
 		memset( &TmpPkt, 0, sizeof( TmpPkt ) );
-		TmpPkt.Offset = htonl( 12 );
-		int Counter = 0;
+		int Counter = 1;
 
 		if( BytesLeft )
 		{
@@ -355,7 +399,7 @@ void VirtualWindow::ProcessEvents( )
 			++Counter;
 		}
 
-		// printf( "Bytes to go: %d\n", BytesToGo );
+		 printf( "Bytes to go: %d\n", BytesToGo );
 
 		while( BytesToGo > 0 )
 		{
@@ -367,7 +411,7 @@ void VirtualWindow::ProcessEvents( )
 			BufferPos += ( MAX_BUFFER_LENGTH - sizeof( int ) );
 
 			/*printf( "Bytes to go:     %d\n", BytesToGo );
-			printf( "Buffer position: %d\n", BufferPos );*/
+			printf( "Buffer position: %d\n", BufferPos );*
 
 			if( ( NumBytes = sendto( m_Socket, &TmpPkt,
 				MAX_BUFFER_LENGTH, 0,
@@ -382,7 +426,55 @@ void VirtualWindow::ProcessEvents( )
 			++Counter;
 		}
 		FramesSent++;
-		printf( "Sent %d frames\n", FramesSent );
+		printf( "Sent %d frames | %d packets\n", FramesSent, Counter );*/
+		
+		for( int i = 0; i < BLOCK_COLUMNS*BLOCK_ROWS; ++i )
+		{
+			ImagePacket TmpPkt;
+			int BufferOffset = 0;
+			memset( &TmpPkt, 0, sizeof( TmpPkt ) );
+			TmpPkt.BlockIndex = htonl( i );
+
+			int BytesRemaining =
+				( BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS );
+			const int BytesLeft =
+				BytesRemaining %( sizeof( ImagePacket )-PACKET_HEADER );
+
+			if( BytesLeft )
+			{
+				memcpy( TmpPkt.Data, g_Block[ i ], BytesLeft );
+				TmpPkt.Offset = htonl( 0 );
+
+				if( ( NumBytes = sendto( m_Socket, &TmpPkt,
+					BytesLeft, 0, ( struct sockaddr * )&RemoteAddress,
+					AddressLength ) ) == -1 )
+				{
+					printf( "Failed to send leftovers\n" );
+				}
+
+				BufferOffset += BytesLeft;
+				BytesRemaining -= BytesLeft;
+			}
+
+			while( BytesRemaining > 0 )
+			{
+				TmpPkt.Offset = htonl( BufferOffset );
+
+				memcpy( TmpPkt.Data, g_Block[ i ] + BufferOffset,
+					sizeof( ImagePacket ) - PACKET_HEADER );
+
+				if( ( NumBytes = sendto( m_Socket, &TmpPkt,
+					sizeof( ImagePacket ), 0,
+					( struct sockaddr * )&RemoteAddress, AddressLength ) ) ==
+						-1 )
+				{
+					printf( "Failed to send data\n" );
+				}
+
+				BufferOffset += ( sizeof( ImagePacket ) - PACKET_HEADER );
+				BytesRemaining -= ( sizeof( ImagePacket ) - PACKET_HEADER );
+			}
+		}
 	}
 }
 
