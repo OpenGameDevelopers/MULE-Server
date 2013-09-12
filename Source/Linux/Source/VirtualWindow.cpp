@@ -46,7 +46,7 @@ Colour g_Block[ BLOCK_COLUMNS * BLOCK_ROWS ]
 	[ BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS ];
 
 unsigned char *g_pJPEGBuffer = NULL;
-unsigned long g_JPEGBufferLength = 0;
+unsigned long g_JPEGBufferLength = 0UL;
 
 void *GetINetAddr( struct sockaddr *p_Addr )
 {
@@ -331,7 +331,7 @@ void VirtualWindow::ProcessEvents( )
 	int BytesRecv;
 	int NumBytes;
 	char AddrStr[ INET6_ADDRSTRLEN ];
-	int BytesToGo = IMAGE_WIDTH*IMAGE_HEIGHT*IMAGE_CHANNELS;
+	long BytesToGo = 0L;
 	IMAGE_LAYOUT Layout;
 	memset( &Layout, 0, sizeof( Layout ) );
 
@@ -432,54 +432,54 @@ void VirtualWindow::ProcessEvents( )
 
 		JpegGen = true;
 	}
-/*
+
 	BytesToGo = g_JPEGBufferLength;
 
-	printf( "Waiting on client to send frame data...\n" );
+	unsigned long PacketsLeft = ( BytesToGo / ( sizeof( Buffer )-IMAGE_DATA_HEADER )  ) +
+		( ( BytesToGo % ( sizeof( Buffer )-IMAGE_DATA_HEADER ) ) ? 1 : 0 );
+	unsigned int IDProcessed[ PacketsLeft ];
+	memset( IDProcessed, 0, sizeof( IDProcessed ) );
 
-	AddressLength = sizeof( RemoteAddress );
+	IMAGE_DATA_STREAM Stream;
+	memset( &Stream, 0, sizeof( Stream ) );
 
-	if( ( BytesRecv = recvfrom( m_Socket, Buffer, MAX_BUFFER_LENGTH-1, 0,
-		( struct sockaddr * )&RemoteAddress, &AddressLength ) ) == -1 )
+	unsigned long PacketCount = PacketsLeft; 
+	Buffer.ID = htonl( 2 );
+	for( size_t i = 0; i < sizeof( unsigned long ); ++i )
 	{
-		printf( "Error receiving from socket\n" );
+		Buffer.Data[ i ] = ( PacketCount & 0xFF ) << ( 8*i );
+
+		printf( "0x%02X\n", Buffer.Data[ i ] );
 	}
-	else
+	unsigned long Reverse = 0;
+	for( size_t i = 0; i < sizeof( unsigned long ); ++i )
 	{
-		printf( "Got packet from %s\n", inet_ntop( RemoteAddress.ss_family,
-			GetINetAddr( ( struct sockaddr * )&RemoteAddress ), AddrStr,
-			sizeof( AddrStr ) ) );
-		printf( "Packet [%d bytes]:\n", BytesRecv );
-		Buffer[ BytesRecv ] = '\0';
-		printf( "%s\n", Buffer );
-		
-		printf( "Bytes per block: %d\n",
-			BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS );
-		printf( "%d packets of size %d\n",
-			( BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS ) /
-				( sizeof( ImagePacket )-PACKET_HEADER ),
-				sizeof( ImagePacket )-PACKET_HEADER);
-		printf( "One packet of size %d\n",
-			( BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS ) %
-				( sizeof( ImagePacket )-PACKET_HEADER ) );
-		
+		Reverse |= ( Buffer.Data[ i ] & 0xFF ) << ( 8*i );
+		printf( "0x%02X\n", Buffer.Data[ i ] );
+	}
+	printf( "Reverse: %lu\n",  Reverse );
+	printf( "complete: 0x%016X\n", Reverse );
+	sendto( m_Socket, &Buffer, sizeof( Buffer ), 0,
+		( struct sockaddr * )&RemoteAddress, AddressLength );
+/*
+	while( PacketsLeft > 0 )
+	{
 		int BufferPos = 0;
-		const int BytesLeft = BytesToGo % ( MAX_BUFFER_LENGTH-PACKET_HEADER );
-
-		ImagePacket TmpPkt;
-		memset( &TmpPkt, 0, sizeof( TmpPkt ) );
-		int Counter = 1;
+		const int BytesLeft = BytesToGo %
+			( MAX_BUFFER_LENGTH-IMAGE_DATA_HEADER );
 
 		if( BytesLeft )
 		{
 			printf( "Left: %d\n", BytesLeft );
 			BytesToGo -= BytesLeft;
 			BufferPos += BytesLeft;
+			unsigned int Zero = htonl( 0 );
+			memcpy( &Buffer.ID, &Zero, sizeof( unsigned int ) );
+			memcpy( &Stream.Offset, &Zero, sizeof( unsigned int ) );
+			memcpy( Stream.Data, g_pJPEGBuffer, BytesLeft );
+			memcpy( Buffer.Data, &Stream, sizeof( Stream ) );
 
-			memcpy( TmpPkt.Data, g_pJPEGBuffer, BytesLeft );
-			TmpPkt.Offset = htonl( 0 );
-
-			if( ( NumBytes = sendto( m_Socket, &TmpPkt,
+			if( ( NumBytes = sendto( m_Socket, &Buffer,
 				BytesLeft, 0, ( struct sockaddr * )&RemoteAddress,
 				AddressLength ) ) == -1 )
 			{
@@ -489,16 +489,23 @@ void VirtualWindow::ProcessEvents( )
 			{
 				printf( "Leftovers sent\n" );
 			}
-			++Counter;
+
+			// Assume the packet went through...
+			--PacketsLeft;
 		}
 
 		printf( "Bytes to go: %d\n", BytesToGo );
 
 		while( BytesToGo > 0 )
 		{
-			TmpPkt.Offset = htonl( BufferPos );
-			memcpy( TmpPkt.Data, g_pJPEGBuffer + BufferPos,
+			Buffer.ID =
+				( BufferPos / ( sizeof( Buffer ) - IMAGE_DATA_HEADER ) ) +
+				( ( BufferPos % ( sizeof( Buffer ) - IMAGE_DATA_HEADER ) ) ? 1:
+				0 );
+			Stream.Offset = htonl( BufferPos );
+			memcpy( Stream.Data, g_pJPEGBuffer + BufferPos,
 				MAX_BUFFER_LENGTH - PACKET_HEADER );
+			memcpy( Buffer.Data, &Stream, sizeof( Stream ) );
 
 			BytesToGo -= ( MAX_BUFFER_LENGTH - PACKET_HEADER );
 			BufferPos += ( MAX_BUFFER_LENGTH - PACKET_HEADER );
@@ -506,7 +513,7 @@ void VirtualWindow::ProcessEvents( )
 			printf( "Bytes to go:     %d\n", BytesToGo );
 			printf( "Buffer position: %d\n", BufferPos );
 
-			if( ( NumBytes = sendto( m_Socket, &TmpPkt,
+			if( ( NumBytes = sendto( m_Socket, &Stream,
 				MAX_BUFFER_LENGTH, 0,
 				( struct sockaddr * )&RemoteAddress, AddressLength ) ) == -1 )
 			{
@@ -514,12 +521,14 @@ void VirtualWindow::ProcessEvents( )
 			}
 			else
 			{
-				// printf( "Sent %d bytes\n", NumBytes );
 			}
-			++Counter;
+
+			// Assume the packet went through...
+			--PacketsLeft;
 		}
-		FramesSent++;
-		printf( "Sent %d frames | %d packets\n", FramesSent, Counter );*/
+
+	printf( "Packets remaining: %d\n", PacketsLeft );
+	}*/
 	/*	
 		for( int i = 0; i < BLOCK_COLUMNS*BLOCK_ROWS; ++i )
 		{

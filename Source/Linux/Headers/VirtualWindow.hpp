@@ -22,6 +22,14 @@ typedef struct __tagIMAGE_LAYOUT
 	int Compression;
 }IMAGE_LAYOUT;
 
+typedef struct __tagIMAGE_DATA_STREAM
+{
+	int				Offset;
+	unsigned char	Data[ 1016 ];
+}IMAGE_DATA_STREAM;
+
+const int IMAGE_DATA_HEADER = sizeof( int )*2;
+
 class VirtualWindow
 {
 public:
