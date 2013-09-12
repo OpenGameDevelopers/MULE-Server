@@ -346,41 +346,55 @@ void VirtualWindow::ProcessEvents( )
 
 	if( JpegGen == false )
 	{
-	printf( "Writing image... " );
+		printf( "Writing image... " );
 
-	FILE *pOut = fopen( "/tmp/TestMULE.jpg", "wb" );
+		FILE *pOut = fopen( "/tmp/TestMULE.jpg", "wb" );
 
-	if( !pOut )
-	{
-		printf( "Failed to open /tmp/TestMULE.jpg for writing" );
+		if( !pOut )
+		{
+			printf( "Failed to open /tmp/TestMULE.jpg for writing" );
+			JpegGen = true;
+			return;
+		}
+		unsigned char *pOutBuffer = NULL;
+
+		printf( "Buffer: 0x%08X\n", pOutBuffer );
+		unsigned long OutLen;
+		struct jpeg_compress_struct JpegInfo;
+		struct jpeg_error_mgr		JpegError;
+		JpegInfo.err = jpeg_std_error( &JpegError );
+		jpeg_create_compress( &JpegInfo );
+		jpeg_mem_dest( &JpegInfo, &pOutBuffer, &OutLen );
+		JpegInfo.image_width = IMAGE_WIDTH;
+		JpegInfo.image_height = IMAGE_HEIGHT;
+		JpegInfo.input_components = IMAGE_CHANNELS;
+		JpegInfo.in_color_space = JCS_RGB;
+
+		jpeg_set_defaults( &JpegInfo );
+		jpeg_set_quality( &JpegInfo, 100, true );
+		jpeg_start_compress( &JpegInfo, true );
+		JSAMPROW pRow;
+
+		// Need to flip the image
+		while( JpegInfo.next_scanline < JpegInfo.image_height )
+		{
+			pRow = ( JSAMPROW )&g_BufferToSend[ JpegInfo.next_scanline *
+				IMAGE_CHANNELS * IMAGE_WIDTH ];
+			jpeg_write_scanlines( &JpegInfo, &pRow, 1 );
+		}
+
+		jpeg_finish_compress( &JpegInfo );
+		jpeg_destroy_compress( &JpegInfo );
+		printf( "done\n" );
+
+		printf( "Total image size: %lu\n", OutLen );
+
+		fwrite( pOutBuffer, 1, OutLen, pOut );
+		
+		free( pOutBuffer );
+		fclose( pOut );
+
 		JpegGen = true;
-		return;
-	}
-	struct jpeg_compress_struct JpegInfo;
-	struct jpeg_error_mgr		JpegError;
-	JpegInfo.err = jpeg_std_error( &JpegError );
-	jpeg_create_compress( &JpegInfo );
-	jpeg_stdio_dest( &JpegInfo, pOut );
-	JpegInfo.image_width = IMAGE_WIDTH;
-	JpegInfo.image_height = IMAGE_HEIGHT;
-	JpegInfo.input_components = IMAGE_CHANNELS;
-	JpegInfo.in_color_space = JCS_RGB;
-
-	jpeg_set_defaults( &JpegInfo );
-	jpeg_set_quality( &JpegInfo, 100, true );
-	jpeg_start_compress( &JpegInfo, true );
-	JSAMPROW pRow;
-	// Need to flip the image
-	while( JpegInfo.next_scanline < JpegInfo.image_height )
-	{
-		pRow = ( JSAMPROW )&g_BufferToSend[ JpegInfo.next_scanline *
-			IMAGE_CHANNELS * IMAGE_WIDTH ];
-		jpeg_write_scanlines( &JpegInfo, &pRow, 1 );
-	}
-	jpeg_finish_compress( &JpegInfo );
-	fclose( pOut );
-	printf( "done\n" );
-	JpegGen = true;
 	}
 /*
 	printf( "Waiting on client to send frame data...\n" );
