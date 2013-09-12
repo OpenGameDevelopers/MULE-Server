@@ -10,6 +10,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <jpeglib.h>
 
 const int MAX_BUFFER_LENGTH	= 1024;
 
@@ -315,6 +316,7 @@ void VirtualWindow::Destroy( )
 void VirtualWindow::ProcessEvents( )
 {
 	XEvent Event;
+	static bool JpegGen = false;
 	static int FramesSent = 0;
 	struct sockaddr_storage RemoteAddress;
 	socklen_t AddressLength;
@@ -342,10 +344,49 @@ void VirtualWindow::ProcessEvents( )
 	// Get the buffer here?
 	glXSwapBuffers( m_pDisplay, m_Window );
 
+	if( JpegGen == false )
+	{
+	printf( "Writing image... " );
+
+	FILE *pOut = fopen( "/tmp/TestMULE.jpg", "wb" );
+
+	if( !pOut )
+	{
+		printf( "Failed to open /tmp/TestMULE.jpg for writing" );
+		JpegGen = true;
+		return;
+	}
+	struct jpeg_compress_struct JpegInfo;
+	struct jpeg_error_mgr		JpegError;
+	JpegInfo.err = jpeg_std_error( &JpegError );
+	jpeg_create_compress( &JpegInfo );
+	jpeg_stdio_dest( &JpegInfo, pOut );
+	JpegInfo.image_width = IMAGE_WIDTH;
+	JpegInfo.image_height = IMAGE_HEIGHT;
+	JpegInfo.input_components = IMAGE_CHANNELS;
+	JpegInfo.in_color_space = JCS_RGB;
+
+	jpeg_set_defaults( &JpegInfo );
+	jpeg_set_quality( &JpegInfo, 100, true );
+	jpeg_start_compress( &JpegInfo, true );
+	JSAMPROW pRow;
+	// Need to flip the image
+	while( JpegInfo.next_scanline < JpegInfo.image_height )
+	{
+		pRow = ( JSAMPROW )&g_BufferToSend[ JpegInfo.next_scanline *
+			IMAGE_CHANNELS * IMAGE_WIDTH ];
+		jpeg_write_scanlines( &JpegInfo, &pRow, 1 );
+	}
+	jpeg_finish_compress( &JpegInfo );
+	fclose( pOut );
+	printf( "done\n" );
+	JpegGen = true;
+	}
+/*
 	printf( "Waiting on client to send frame data...\n" );
 
-	AddressLength = sizeof( RemoteAddress );
-
+	AddressLength = sizeof( RemoteAddress );*/
+/*
 	if( ( BytesRecv = recvfrom( m_Socket, Buffer, MAX_BUFFER_LENGTH-1, 0,
 		( struct sockaddr * )&RemoteAddress, &AddressLength ) ) == -1 )
 	{
@@ -368,7 +409,7 @@ void VirtualWindow::ProcessEvents( )
 				sizeof( ImagePacket )-PACKET_HEADER);
 		printf( "One packet of size %d\n",
 			( BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS ) %
-				( sizeof( ImagePacket )-PACKET_HEADER ) );
+				( sizeof( ImagePacket )-PACKET_HEADER ) );*/
 		/*
 		int BufferPos = 0;
 		const int BytesLeft = BytesToGo % ( MAX_BUFFER_LENGTH-sizeof( int ) );
@@ -428,7 +469,7 @@ void VirtualWindow::ProcessEvents( )
 		FramesSent++;
 		printf( "Sent %d frames | %d packets\n", FramesSent, Counter );*/
 		
-		for( int i = 0; i < BLOCK_COLUMNS*BLOCK_ROWS; ++i )
+		/*for( int i = 0; i < BLOCK_COLUMNS*BLOCK_ROWS; ++i )
 		{
 			ImagePacket TmpPkt;
 			int BufferOffset = 0;
@@ -475,7 +516,7 @@ void VirtualWindow::ProcessEvents( )
 				BytesRemaining -= ( sizeof( ImagePacket ) - PACKET_HEADER );
 			}
 		}
-	}
+	}*/
 }
 
 int VirtualWindow::AddView( RenderView &p_View )
