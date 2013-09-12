@@ -16,9 +16,9 @@ const int MAX_BUFFER_LENGTH	= 1024;
 
 typedef struct __tagImagePacket
 {
-	int		BlockIndex;
+//	int		BlockIndex;
 	int		Offset;
-	char	Data[ 1016 ];
+	char	Data[ 1020 ];
 }ImagePacket;
 
 typedef struct __tagColour
@@ -28,7 +28,7 @@ typedef struct __tagColour
 	char B;
 }Colour;
 
-const int PACKET_HEADER		= sizeof( int )*2;
+const int PACKET_HEADER		= sizeof( int );//*2;
 const int IMAGE_WIDTH		= 800;
 const int IMAGE_HEIGHT		= 600;
 // Blocks will split the image up, anything that doesn't fill in the pitch is
@@ -44,6 +44,9 @@ const int BLOCK_ROWS = IMAGE_HEIGHT/BLOCK_SIZE +
 char g_BufferToSend[ IMAGE_WIDTH*IMAGE_HEIGHT*IMAGE_CHANNELS ];
 Colour g_Block[ BLOCK_COLUMNS * BLOCK_ROWS ]
 	[ BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS ];
+
+unsigned char *g_pJPEGBuffer = NULL;
+unsigned long g_JPEGBufferLength = 0;
 
 void *GetINetAddr( struct sockaddr *p_Addr )
 {
@@ -286,6 +289,10 @@ int VirtualWindow::Initialise( )
 
 void VirtualWindow::Destroy( )
 {
+	if( g_pJPEGBuffer )
+	{
+		free( g_pJPEGBuffer );
+	}
 	if( m_Socket )
 	{
 		close( m_Socket );
@@ -320,13 +327,45 @@ void VirtualWindow::ProcessEvents( )
 	static int FramesSent = 0;
 	struct sockaddr_storage RemoteAddress;
 	socklen_t AddressLength;
-	char Buffer[ MAX_BUFFER_LENGTH ];
+	IMAGE_DATA Buffer;
 	int BytesRecv;
 	int NumBytes;
 	char AddrStr[ INET6_ADDRSTRLEN ];
 	int BytesToGo = IMAGE_WIDTH*IMAGE_HEIGHT*IMAGE_CHANNELS;
+	IMAGE_LAYOUT Layout;
+	memset( &Layout, 0, sizeof( Layout ) );
 
 	int Pending = XPending( m_pDisplay );
+
+	printf( "Waiting on client\n" );
+	if( ( BytesRecv = recvfrom( m_Socket, &Buffer, sizeof( Buffer ), 0,
+		( struct sockaddr * )&RemoteAddress, &AddressLength ) ) == -1 )
+	{
+	}
+	else
+	{
+		printf( "Packet type: %d\n", ntohl( Buffer.ID ) );
+		switch( ntohl( Buffer.ID ) )
+		{
+			case 1:
+			{
+				memcpy( &Layout, Buffer.Data, sizeof( Layout ) );
+				Layout.Width = ntohl( Layout.Width );
+				Layout.Height = ntohl( Layout.Height );
+				Layout.Compression = ntohl( Layout.Compression );
+				printf( "Width: %d\n", Layout.Width );
+				printf( "Height: %d\n", Layout.Height );
+				printf( "Compression: %d\n", Layout.Compression );
+				break;
+			}
+			default:
+			{
+				printf( "Unknown ID\n" );
+				break;
+			}
+		}
+	}
+	printf( "Client connected\n" );
 
 	// Maybe create a thread here for network messages?
 
@@ -356,15 +395,12 @@ void VirtualWindow::ProcessEvents( )
 			JpegGen = true;
 			return;
 		}
-		unsigned char *pOutBuffer = NULL;
 
-		printf( "Buffer: 0x%08X\n", pOutBuffer );
-		unsigned long OutLen;
 		struct jpeg_compress_struct JpegInfo;
 		struct jpeg_error_mgr		JpegError;
 		JpegInfo.err = jpeg_std_error( &JpegError );
 		jpeg_create_compress( &JpegInfo );
-		jpeg_mem_dest( &JpegInfo, &pOutBuffer, &OutLen );
+		jpeg_mem_dest( &JpegInfo, &g_pJPEGBuffer, &g_JPEGBufferLength );
 		JpegInfo.image_width = IMAGE_WIDTH;
 		JpegInfo.image_height = IMAGE_HEIGHT;
 		JpegInfo.input_components = IMAGE_CHANNELS;
@@ -387,20 +423,22 @@ void VirtualWindow::ProcessEvents( )
 		jpeg_destroy_compress( &JpegInfo );
 		printf( "done\n" );
 
-		printf( "Total image size: %lu\n", OutLen );
+		printf( "Total image size: %lu\n", g_JPEGBufferLength );
 
-		fwrite( pOutBuffer, 1, OutLen, pOut );
+		fwrite( g_pJPEGBuffer, sizeof( unsigned char ), g_JPEGBufferLength,
+			pOut );
 		
-		free( pOutBuffer );
 		fclose( pOut );
 
 		JpegGen = true;
 	}
 /*
+	BytesToGo = g_JPEGBufferLength;
+
 	printf( "Waiting on client to send frame data...\n" );
 
-	AddressLength = sizeof( RemoteAddress );*/
-/*
+	AddressLength = sizeof( RemoteAddress );
+
 	if( ( BytesRecv = recvfrom( m_Socket, Buffer, MAX_BUFFER_LENGTH-1, 0,
 		( struct sockaddr * )&RemoteAddress, &AddressLength ) ) == -1 )
 	{
@@ -423,10 +461,10 @@ void VirtualWindow::ProcessEvents( )
 				sizeof( ImagePacket )-PACKET_HEADER);
 		printf( "One packet of size %d\n",
 			( BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS ) %
-				( sizeof( ImagePacket )-PACKET_HEADER ) );*/
-		/*
+				( sizeof( ImagePacket )-PACKET_HEADER ) );
+		
 		int BufferPos = 0;
-		const int BytesLeft = BytesToGo % ( MAX_BUFFER_LENGTH-sizeof( int ) );
+		const int BytesLeft = BytesToGo % ( MAX_BUFFER_LENGTH-PACKET_HEADER );
 
 		ImagePacket TmpPkt;
 		memset( &TmpPkt, 0, sizeof( TmpPkt ) );
@@ -438,7 +476,7 @@ void VirtualWindow::ProcessEvents( )
 			BytesToGo -= BytesLeft;
 			BufferPos += BytesLeft;
 
-			memcpy( TmpPkt.Data, g_BufferToSend, BytesLeft );
+			memcpy( TmpPkt.Data, g_pJPEGBuffer, BytesLeft );
 			TmpPkt.Offset = htonl( 0 );
 
 			if( ( NumBytes = sendto( m_Socket, &TmpPkt,
@@ -454,19 +492,19 @@ void VirtualWindow::ProcessEvents( )
 			++Counter;
 		}
 
-		 printf( "Bytes to go: %d\n", BytesToGo );
+		printf( "Bytes to go: %d\n", BytesToGo );
 
 		while( BytesToGo > 0 )
 		{
 			TmpPkt.Offset = htonl( BufferPos );
-			memcpy( TmpPkt.Data, g_BufferToSend + BufferPos,
-				MAX_BUFFER_LENGTH - sizeof( int ) );
+			memcpy( TmpPkt.Data, g_pJPEGBuffer + BufferPos,
+				MAX_BUFFER_LENGTH - PACKET_HEADER );
 
-			BytesToGo -= ( MAX_BUFFER_LENGTH - sizeof( int ) );
-			BufferPos += ( MAX_BUFFER_LENGTH - sizeof( int ) );
+			BytesToGo -= ( MAX_BUFFER_LENGTH - PACKET_HEADER );
+			BufferPos += ( MAX_BUFFER_LENGTH - PACKET_HEADER );
 
-			/*printf( "Bytes to go:     %d\n", BytesToGo );
-			printf( "Buffer position: %d\n", BufferPos );*
+			printf( "Bytes to go:     %d\n", BytesToGo );
+			printf( "Buffer position: %d\n", BufferPos );
 
 			if( ( NumBytes = sendto( m_Socket, &TmpPkt,
 				MAX_BUFFER_LENGTH, 0,
@@ -482,8 +520,8 @@ void VirtualWindow::ProcessEvents( )
 		}
 		FramesSent++;
 		printf( "Sent %d frames | %d packets\n", FramesSent, Counter );*/
-		
-		/*for( int i = 0; i < BLOCK_COLUMNS*BLOCK_ROWS; ++i )
+	/*	
+		for( int i = 0; i < BLOCK_COLUMNS*BLOCK_ROWS; ++i )
 		{
 			ImagePacket TmpPkt;
 			int BufferOffset = 0;
@@ -529,8 +567,8 @@ void VirtualWindow::ProcessEvents( )
 				BufferOffset += ( sizeof( ImagePacket ) - PACKET_HEADER );
 				BytesRemaining -= ( sizeof( ImagePacket ) - PACKET_HEADER );
 			}
-		}
-	}*/
+		}*/
+	//}
 }
 
 int VirtualWindow::AddView( RenderView &p_View )

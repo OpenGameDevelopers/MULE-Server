@@ -9,6 +9,19 @@
 #include <GL/glxext.h>
 #include <GL/glext.h>
 
+typedef struct __tagIMAGE_DATA
+{
+	unsigned int	ID;
+	unsigned char	Data[ 1020 ];
+}IMAGE_DATA;
+
+typedef struct __tagIMAGE_LAYOUT
+{
+	int	Width;
+	int Height;
+	int Compression;
+}IMAGE_LAYOUT;
+
 class VirtualWindow
 {
 public:
