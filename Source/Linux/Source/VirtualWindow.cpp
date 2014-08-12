@@ -7,7 +7,7 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
+#include <sys/select.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <jpeglib.h>
@@ -58,12 +58,24 @@ void *GetINetAddr( struct sockaddr *p_Addr )
 	return &( ( ( struct sockaddr_in6 * )p_Addr )->sin6_addr );
 }
 
+uint64_t htonll( uint64_t p_Host )
+{
+	return ( ( ( uint64_t ) htonl( p_Host ) << 32 ) + htonl( p_Host >> 32 ) );
+}
+
+uint64_t ntohll( uint64_t p_Network )
+{
+	return ( ( ( uint64_t ) ntohl( p_Network ) << 32 ) +
+		ntohl( p_Network >> 32 ) );
+}
+
 VirtualWindow::VirtualWindow( )
 {
 	m_pDisplay = NULL;
 	m_Window = 0;
 	m_pXVisualInfo = NULL;
 	memset( g_BufferToSend, 0, IMAGE_WIDTH*IMAGE_HEIGHT*IMAGE_CHANNELS );
+	m_SequenceNumber = 0ULL;
 }
 
 VirtualWindow::~VirtualWindow( )
@@ -77,7 +89,8 @@ int VirtualWindow::Initialise( )
 	struct addrinfo SocketHints, *pServerInfo, *pAddrItr;
 	memset( &SocketHints, 0, sizeof( SocketHints ) );
 	SocketHints.ai_family	= AF_UNSPEC;
-	SocketHints.ai_socktype	= SOCK_DGRAM;
+	SocketHints.ai_socktype	= SOCK_STREAM;
+	SocketHints.ai_protocol	= IPPROTO_TCP;
 	SocketHints.ai_flags	= AI_PASSIVE;
 
 	int Error;
@@ -118,11 +131,23 @@ int VirtualWindow::Initialise( )
 		return 0;
 	}
 
-/*	int NonBlock = 1;
+	if( listen( m_Socket, 128 ) == -1 )
+	{
+		printf( "Failed to set socket to listen\n" );
+		return 0;
+	}
+
+	int NonBlock = 1;
 	if( fcntl( m_Socket, F_SETFL, O_NONBLOCK, NonBlock ) == -1 )
 	{
 		printf( "Failed to set up non-blocking socket\n" );
-	}*/
+	}
+
+	FD_ZERO( &m_MasterFDS );
+	FD_ZERO( &m_ReadFDS );
+	FD_SET( m_Socket, &m_MasterFDS );
+
+	m_MaximumSocketFD = m_Socket;
 
 	// Open the /tmp/.X11-unix directory and search for files beginning with X
 	DIR *pXDir = opendir( "/tmp/.X11-unix" );
@@ -337,35 +362,144 @@ void VirtualWindow::ProcessEvents( )
 
 	int Pending = XPending( m_pDisplay );
 
-	printf( "Waiting on client\n" );
-	if( ( BytesRecv = recvfrom( m_Socket, &Buffer, sizeof( Buffer ), 0,
-		( struct sockaddr * )&RemoteAddress, &AddressLength ) ) == -1 )
+	if( m_Clients.size( ) > 0 )
 	{
-	}
-	else
-	{
-		printf( "Packet type: %d\n", ntohl( Buffer.ID ) );
-		switch( ntohl( Buffer.ID ) )
+		for( size_t i = 0; i < m_Clients.size( ); ++i )
 		{
-			case 1:
+			printf( "%d clients currently connected:\n", m_Clients.size( ) );
+			for( int i = 0; i < m_Clients.size( ); ++i )
 			{
-				memcpy( &Layout, Buffer.Data, sizeof( Layout ) );
-				Layout.Width = ntohl( Layout.Width );
-				Layout.Height = ntohl( Layout.Height );
-				Layout.Compression = ntohl( Layout.Compression );
-				printf( "Width: %d\n", Layout.Width );
-				printf( "Height: %d\n", Layout.Height );
-				printf( "Compression: %d\n", Layout.Compression );
-				break;
-			}
-			default:
-			{
-				printf( "Unknown ID\n" );
-				break;
+				printf( "\t%s\n", m_Clients[ i ].IP );
 			}
 		}
 	}
-	printf( "Client connected\n" );
+	else
+	{
+		printf( "Waiting on client\n" );
+	}
+
+	memcpy( &m_ReadFDS, &m_MasterFDS, sizeof( m_MasterFDS ) );
+
+	int SocketsReady = 0;
+
+	struct timeval TimeOut;
+	TimeOut.tv_sec = 0;
+	TimeOut.tv_usec = 0;
+
+	if( -1 == ( SocketsReady = select( m_MaximumSocketFD + 1, &m_ReadFDS,
+		NULL, NULL, &TimeOut ) ) )
+	{
+		printf( "Could not call select( ) on socket: %s\n", strerror( errno ) );
+	}
+
+	for( int i = 0; i <= m_MaximumSocketFD && SocketsReady > 0; ++i )
+	{
+		if( FD_ISSET( i, &m_ReadFDS ) )
+		{
+			printf( "Accepting...\n" );
+			--SocketsReady;
+
+			if( i == m_Socket )
+			{
+				int NewClient = 0;
+				printf( "New client\n" );
+
+				struct sockaddr_storage ClientAddr;
+				socklen_t Size = sizeof( ClientAddr );
+
+				if( -1 == ( NewClient = accept( m_Socket, 
+					( struct sockaddr * )&ClientAddr, &Size ) ) )
+				{
+					if( EWOULDBLOCK != errno )
+					{
+						printf( "Failed calling accept( )\n" );
+						break;
+					}
+				}
+
+				FD_SET( NewClient, &m_MasterFDS );
+
+				if( NewClient > m_MaximumSocketFD )
+				{
+					m_MaximumSocketFD = NewClient;
+				}
+
+				char IP[ INET6_ADDRSTRLEN ];
+
+				inet_ntop( ClientAddr.ss_family,
+					GetINetAddr( ( struct sockaddr * )&ClientAddr ),
+					IP, sizeof( IP ) );
+
+				REMOTE_CLIENT Remote;
+				memset( &Remote, 0, sizeof( Remote ) );
+				Remote.Socket = NewClient;
+				strncpy( Remote.IP, IP, strlen( IP ) );
+
+				m_Clients.push_back( Remote );
+
+				printf( "\tIP address: %s\n", Remote.IP );
+			}
+			else
+			{
+				printf( "Receiving data..\n" );
+
+				if( ( BytesRecv = recv( i, &Buffer, sizeof( Buffer ), 0 ) ) ==
+					-1 )
+				{
+					if( EWOULDBLOCK != errno )
+					{
+						printf( "Failed to receive data\n" );
+					}
+					break;
+				}
+
+				if( BytesRecv == 0 )
+				{
+					printf( "Client closed connection\n" );
+					close( i );
+					FD_CLR( i, &m_MasterFDS );
+					
+					std::vector< REMOTE_CLIENT >::iterator ClientDisconnected;
+					ClientDisconnected = m_Clients.begin( );
+					for( ; ClientDisconnected != m_Clients.end( );
+						++ClientDisconnected )
+					{
+						if( ( *ClientDisconnected ).Socket == i )
+						{
+							break;
+						}
+					}
+
+					if( ClientDisconnected != m_Clients.end( ) )
+					{
+						m_Clients.erase( ClientDisconnected );
+					}
+					break;
+				}
+
+				printf( "Packet type: %d\n", ntohl( Buffer.ID ) );
+				switch( ntohl( Buffer.ID ) )
+				{
+					case 1:
+					{
+						memcpy( &Layout, Buffer.Data, sizeof( Layout ) );
+						Layout.Width = ntohl( Layout.Width );
+						Layout.Height = ntohl( Layout.Height );
+						Layout.Compression = ntohl( Layout.Compression );
+						printf( "Width: %d\n", Layout.Width );
+						printf( "Height: %d\n", Layout.Height );
+						printf( "Compression: %d\n", Layout.Compression );
+						break;
+					}
+					default:
+					{
+						printf( "Unknown ID\n" );
+						break;
+					}
+				}
+			}
+		}
+	}
 
 	// Maybe create a thread here for network messages?
 
@@ -382,7 +516,7 @@ void VirtualWindow::ProcessEvents( )
 	glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
 	// Get the buffer here?
 	glXSwapBuffers( m_pDisplay, m_Window );
-
+/*
 	if( JpegGen == false )
 	{
 		printf( "Writing image... " );
@@ -435,7 +569,8 @@ void VirtualWindow::ProcessEvents( )
 
 	BytesToGo = g_JPEGBufferLength;
 
-	unsigned long PacketsLeft = ( BytesToGo / ( sizeof( Buffer )-IMAGE_DATA_HEADER )  ) +
+	unsigned long PacketsLeft =
+		( BytesToGo / ( sizeof( Buffer )-IMAGE_DATA_HEADER )  ) +
 		( ( BytesToGo % ( sizeof( Buffer )-IMAGE_DATA_HEADER ) ) ? 1 : 0 );
 	unsigned int IDProcessed[ PacketsLeft ];
 	memset( IDProcessed, 0, sizeof( IDProcessed ) );
@@ -461,7 +596,7 @@ void VirtualWindow::ProcessEvents( )
 	printf( "complete: 0x%016X\n", Reverse );
 	sendto( m_Socket, &Buffer, sizeof( Buffer ), 0,
 		( struct sockaddr * )&RemoteAddress, AddressLength );
-/*
+
 	while( PacketsLeft > 0 )
 	{
 		int BufferPos = 0;
@@ -474,8 +609,11 @@ void VirtualWindow::ProcessEvents( )
 			BytesToGo -= BytesLeft;
 			BufferPos += BytesLeft;
 			unsigned int Zero = htonl( 0 );
+//			m_SequenceNumber = htonll( m_SequenceNumber );
 			memcpy( &Buffer.ID, &Zero, sizeof( unsigned int ) );
 			memcpy( &Stream.Offset, &Zero, sizeof( unsigned int ) );
+			memcpy( &Stream.SequenceNumber, &m_SequenceNumber,
+				sizeof( uint64_t ) );
 			memcpy( Stream.Data, g_pJPEGBuffer, BytesLeft );
 			memcpy( Buffer.Data, &Stream, sizeof( Stream ) );
 
@@ -527,8 +665,10 @@ void VirtualWindow::ProcessEvents( )
 			--PacketsLeft;
 		}
 
-	printf( "Packets remaining: %d\n", PacketsLeft );
-	}*/
+		printf( "Packets remaining: %d\n", PacketsLeft );
+	}
+	++m_SequenceNumber;
+	printf( "Sequence Number: %llu\n", m_SequenceNumber );*/
 	/*	
 		for( int i = 0; i < BLOCK_COLUMNS*BLOCK_ROWS; ++i )
 		{
