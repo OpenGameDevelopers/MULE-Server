@@ -20,8 +20,9 @@ typedef struct __tagIMAGE_DATA
 typedef struct __tagIMAGE_LAYOUT
 {
 	int	Width;
-	int Height;
-	int Compression;
+	int	Height;
+	int	Compression;
+	int	ViewID;
 }IMAGE_LAYOUT;
 
 typedef struct __tagIMAGE_DATA_STREAM

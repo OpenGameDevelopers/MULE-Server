@@ -48,6 +48,8 @@ Colour g_Block[ BLOCK_COLUMNS * BLOCK_ROWS ]
 unsigned char *g_pJPEGBuffer = NULL;
 unsigned long g_JPEGBufferLength = 0UL;
 
+static int g_ViewID = 1;
+
 void *GetINetAddr( struct sockaddr *p_Addr )
 {
 	if( p_Addr->sa_family == AF_INET )
@@ -347,6 +349,7 @@ void VirtualWindow::Destroy( )
 
 void VirtualWindow::ProcessEvents( )
 {
+	static size_t LastClientCount = 0;
 	XEvent Event;
 	static bool JpegGen = false;
 	static int FramesSent = 0;
@@ -362,20 +365,25 @@ void VirtualWindow::ProcessEvents( )
 
 	int Pending = XPending( m_pDisplay );
 
-	if( m_Clients.size( ) > 0 )
+	if( m_Clients.size( ) != LastClientCount )
 	{
-		for( size_t i = 0; i < m_Clients.size( ); ++i )
+		if( m_Clients.size( ) > 0 )
 		{
-			printf( "%d clients currently connected:\n", m_Clients.size( ) );
-			for( int i = 0; i < m_Clients.size( ); ++i )
+			for( size_t i = 0; i < m_Clients.size( ); ++i )
 			{
-				printf( "\t%s\n", m_Clients[ i ].IP );
+				printf( "%d clients currently connected:\n", m_Clients.size( ) );
+				for( int i = 0; i < m_Clients.size( ); ++i )
+				{
+					printf( "\t%s\n", m_Clients[ i ].IP );
+				}
 			}
 		}
-	}
-	else
-	{
-		printf( "Waiting on client\n" );
+		else
+		{
+			printf( "Waiting on client\n" );
+		}
+
+		LastClientCount = m_Clients.size( );
 	}
 
 	memcpy( &m_ReadFDS, &m_MasterFDS, sizeof( m_MasterFDS ) );
@@ -486,9 +494,27 @@ void VirtualWindow::ProcessEvents( )
 						Layout.Width = ntohl( Layout.Width );
 						Layout.Height = ntohl( Layout.Height );
 						Layout.Compression = ntohl( Layout.Compression );
+						Layout.ViewID = ntohl( Layout.ViewID );
+
+						printf( "=== LAYOUT ===\n" );
+						printf( "View ID: %d\n", Layout.ViewID );
 						printf( "Width: %d\n", Layout.Width );
 						printf( "Height: %d\n", Layout.Height );
 						printf( "Compression: %d\n", Layout.Compression );
+						printf( "==============\n" );
+						break;
+					}
+					case 2:
+					{
+						IMAGE_DATA ViewID;
+						ViewID.ID = htonl( 0 );
+						int ViewIDNet = htonl( g_ViewID );
+						memcpy( ViewID.Data, &ViewIDNet, sizeof( int ) );
+						send( i, &ViewID, sizeof( ViewID ), 0 );
+
+						printf( "Sending client a new view ID: %d\n",
+							g_ViewID );
+						++g_ViewID;
 						break;
 					}
 					default:
