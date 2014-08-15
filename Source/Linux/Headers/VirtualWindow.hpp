@@ -11,6 +11,7 @@
 #include <GL/glext.h>
 #include <netinet/in.h>
 
+#pragma pack( 1 )
 typedef struct __tagIMAGE_DATA
 {
 	unsigned int	ID;
@@ -37,8 +38,10 @@ typedef struct __tagREMOTE_CLIENT
 	int		Socket;
 	char	IP[ INET6_ADDRSTRLEN ];
 }REMOTE_CLIENT;
+#pragma pack( )
 
-const int IMAGE_DATA_HEADER = sizeof( int )*2;
+const int IMAGE_DATA_HEADER = sizeof( int );
+const int IMAGE_DATA_STREAM_HEADER = sizeof( int ) + sizeof( uint64_t );
 
 class VirtualWindow
 {

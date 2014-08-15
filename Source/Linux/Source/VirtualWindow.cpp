@@ -365,6 +365,56 @@ void VirtualWindow::ProcessEvents( )
 
 	int Pending = XPending( m_pDisplay );
 
+	if( JpegGen == false )
+	{
+		printf( "Writing image... " );
+
+		FILE *pOut = fopen( "/tmp/TestMULE.jpg", "wb" );
+
+		if( !pOut )
+		{
+			printf( "Failed to open /tmp/TestMULE.jpg for writing" );
+			JpegGen = true;
+			return;
+		}
+
+		struct jpeg_compress_struct JpegInfo;
+		struct jpeg_error_mgr		JpegError;
+		JpegInfo.err = jpeg_std_error( &JpegError );
+		jpeg_create_compress( &JpegInfo );
+		jpeg_mem_dest( &JpegInfo, &g_pJPEGBuffer, &g_JPEGBufferLength );
+		JpegInfo.image_width = IMAGE_WIDTH;
+		JpegInfo.image_height = IMAGE_HEIGHT;
+		JpegInfo.input_components = IMAGE_CHANNELS;
+		JpegInfo.in_color_space = JCS_RGB;
+
+		jpeg_set_defaults( &JpegInfo );
+		jpeg_set_quality( &JpegInfo, 100, true );
+		jpeg_start_compress( &JpegInfo, true );
+		JSAMPROW pRow;
+
+		// Need to flip the image
+		while( JpegInfo.next_scanline < JpegInfo.image_height )
+		{
+			pRow = ( JSAMPROW )&g_BufferToSend[ JpegInfo.next_scanline *
+				IMAGE_CHANNELS * IMAGE_WIDTH ];
+			jpeg_write_scanlines( &JpegInfo, &pRow, 1 );
+		}
+
+		jpeg_finish_compress( &JpegInfo );
+		jpeg_destroy_compress( &JpegInfo );
+		printf( "done\n" );
+
+		printf( "Total image size: %lu\n", g_JPEGBufferLength );
+
+		fwrite( g_pJPEGBuffer, sizeof( unsigned char ), g_JPEGBufferLength,
+			pOut );
+		
+		fclose( pOut );
+
+		JpegGen = true;
+	}
+
 	if( m_Clients.size( ) != LastClientCount )
 	{
 		if( m_Clients.size( ) > 0 )
@@ -517,6 +567,117 @@ void VirtualWindow::ProcessEvents( )
 						++g_ViewID;
 						break;
 					}
+					case 3:
+					{
+						BytesToGo = g_JPEGBufferLength;
+
+						printf( "Total bytes to send: %d\n", BytesToGo );
+
+						unsigned long PacketsLeft =
+							( BytesToGo / ( sizeof( Buffer )-(
+								IMAGE_DATA_HEADER + IMAGE_DATA_STREAM_HEADER )
+								)  ) +
+							( ( BytesToGo % ( sizeof( Buffer )-(
+								IMAGE_DATA_HEADER + IMAGE_DATA_STREAM_HEADER )
+								) ) ? 1 : 0 );
+
+						printf( "Total packets to send: %lu\n", PacketsLeft );
+						unsigned int IDProcessed[ PacketsLeft ];
+						memset( IDProcessed, 0, sizeof( IDProcessed ) );
+
+						IMAGE_DATA_STREAM Stream;
+						memset( &Stream, 0, sizeof( Stream ) );
+
+						unsigned long PacketCount = htonll( PacketsLeft );
+						Buffer.ID = htonl( 1 );
+
+						unsigned long BufferSize = htonll( g_JPEGBufferLength );
+						
+						memcpy( Buffer.Data, &PacketCount,
+							sizeof( unsigned long ) );
+						memcpy( Buffer.Data + sizeof( unsigned long ),
+							&BufferSize, sizeof( unsigned long ) );
+
+						send( i, &Buffer, sizeof( Buffer ), 0 );
+
+						printf( "Okay\n" );
+
+						while( PacketsLeft > 0 )
+						{
+							printf( "Sending...\n" );
+							int BufferPos = 0;
+							const int BytesLeft = BytesToGo % 
+								( MAX_BUFFER_LENGTH-( IMAGE_DATA_HEADER +
+									IMAGE_DATA_STREAM_HEADER ) );
+
+							printf( "Data subtracted: %d\n", 
+								( MAX_BUFFER_LENGTH-( IMAGE_DATA_HEADER +
+									IMAGE_DATA_STREAM_HEADER ) ) );
+
+							if( BytesLeft )
+							{
+								printf( "Left: %d\n", BytesLeft );
+								BytesToGo -= BytesLeft;
+								BufferPos += BytesLeft;
+								Buffer.ID = htonl( 2 );
+								Stream.Offset = htonl( BytesLeft );
+								Stream.SequenceNumber = m_SequenceNumber;
+								memcpy( Stream.Data, g_pJPEGBuffer,
+									BytesLeft );
+								memcpy( Buffer.Data, &Stream,
+									sizeof( Stream ) );
+
+								if( ( NumBytes = send( i, &Buffer,
+									sizeof( Buffer ), 0 ) ) == -1 )
+								{
+									printf( "Failed to send leftovers\n" );
+								}
+								else
+								{
+									printf( "Leftovers sent\n" );
+								}
+
+								// Assume the packet went through...
+								--PacketsLeft;
+							}
+
+							printf( "Bytes to go: %d\n", BytesToGo );
+
+							while( BytesToGo > 0 )
+							{
+								Buffer.ID = htonl( 3 );
+								Stream.Offset = htonl( BufferPos );
+								memcpy( Stream.Data, g_pJPEGBuffer + BufferPos,
+									sizeof( Stream.Data ) );
+								memcpy( Buffer.Data, &Stream,
+									sizeof( Stream ) );
+
+								BytesToGo -= sizeof( Stream.Data );
+								BufferPos += sizeof( Stream.Data );
+
+								printf( "Bytes to go:     %d\n", BytesToGo );
+								printf( "Buffer position: %d\n", BufferPos );
+
+								if( ( NumBytes = send( i, &Buffer,
+									sizeof( Buffer ), 0 ) ) == -1 )
+								{
+									printf( "Failed to send data: %s\n",
+										strerror( errno ) );
+								}
+								else
+								{
+								}
+
+								// Assume the packet went through...
+								--PacketsLeft;
+							}
+
+							printf( "Packets remaining: %d\n", PacketsLeft );
+						}
+						++m_SequenceNumber;
+						printf( "Sequence Number: %llu\n", m_SequenceNumber );
+						break;
+					}
 					default:
 					{
 						printf( "Unknown ID\n" );
@@ -542,208 +703,8 @@ void VirtualWindow::ProcessEvents( )
 	glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
 	// Get the buffer here?
 	glXSwapBuffers( m_pDisplay, m_Window );
-/*
-	if( JpegGen == false )
-	{
-		printf( "Writing image... " );
 
-		FILE *pOut = fopen( "/tmp/TestMULE.jpg", "wb" );
-
-		if( !pOut )
-		{
-			printf( "Failed to open /tmp/TestMULE.jpg for writing" );
-			JpegGen = true;
-			return;
-		}
-
-		struct jpeg_compress_struct JpegInfo;
-		struct jpeg_error_mgr		JpegError;
-		JpegInfo.err = jpeg_std_error( &JpegError );
-		jpeg_create_compress( &JpegInfo );
-		jpeg_mem_dest( &JpegInfo, &g_pJPEGBuffer, &g_JPEGBufferLength );
-		JpegInfo.image_width = IMAGE_WIDTH;
-		JpegInfo.image_height = IMAGE_HEIGHT;
-		JpegInfo.input_components = IMAGE_CHANNELS;
-		JpegInfo.in_color_space = JCS_RGB;
-
-		jpeg_set_defaults( &JpegInfo );
-		jpeg_set_quality( &JpegInfo, 100, true );
-		jpeg_start_compress( &JpegInfo, true );
-		JSAMPROW pRow;
-
-		// Need to flip the image
-		while( JpegInfo.next_scanline < JpegInfo.image_height )
-		{
-			pRow = ( JSAMPROW )&g_BufferToSend[ JpegInfo.next_scanline *
-				IMAGE_CHANNELS * IMAGE_WIDTH ];
-			jpeg_write_scanlines( &JpegInfo, &pRow, 1 );
-		}
-
-		jpeg_finish_compress( &JpegInfo );
-		jpeg_destroy_compress( &JpegInfo );
-		printf( "done\n" );
-
-		printf( "Total image size: %lu\n", g_JPEGBufferLength );
-
-		fwrite( g_pJPEGBuffer, sizeof( unsigned char ), g_JPEGBufferLength,
-			pOut );
-		
-		fclose( pOut );
-
-		JpegGen = true;
-	}
-
-	BytesToGo = g_JPEGBufferLength;
-
-	unsigned long PacketsLeft =
-		( BytesToGo / ( sizeof( Buffer )-IMAGE_DATA_HEADER )  ) +
-		( ( BytesToGo % ( sizeof( Buffer )-IMAGE_DATA_HEADER ) ) ? 1 : 0 );
-	unsigned int IDProcessed[ PacketsLeft ];
-	memset( IDProcessed, 0, sizeof( IDProcessed ) );
-
-	IMAGE_DATA_STREAM Stream;
-	memset( &Stream, 0, sizeof( Stream ) );
-
-	unsigned long PacketCount = PacketsLeft; 
-	Buffer.ID = htonl( 2 );
-	for( size_t i = 0; i < sizeof( unsigned long ); ++i )
-	{
-		Buffer.Data[ i ] = ( PacketCount & 0xFF ) << ( 8*i );
-
-		printf( "0x%02X\n", Buffer.Data[ i ] );
-	}
-	unsigned long Reverse = 0;
-	for( size_t i = 0; i < sizeof( unsigned long ); ++i )
-	{
-		Reverse |= ( Buffer.Data[ i ] & 0xFF ) << ( 8*i );
-		printf( "0x%02X\n", Buffer.Data[ i ] );
-	}
-	printf( "Reverse: %lu\n",  Reverse );
-	printf( "complete: 0x%016X\n", Reverse );
-	sendto( m_Socket, &Buffer, sizeof( Buffer ), 0,
-		( struct sockaddr * )&RemoteAddress, AddressLength );
-
-	while( PacketsLeft > 0 )
-	{
-		int BufferPos = 0;
-		const int BytesLeft = BytesToGo %
-			( MAX_BUFFER_LENGTH-IMAGE_DATA_HEADER );
-
-		if( BytesLeft )
-		{
-			printf( "Left: %d\n", BytesLeft );
-			BytesToGo -= BytesLeft;
-			BufferPos += BytesLeft;
-			unsigned int Zero = htonl( 0 );
-//			m_SequenceNumber = htonll( m_SequenceNumber );
-			memcpy( &Buffer.ID, &Zero, sizeof( unsigned int ) );
-			memcpy( &Stream.Offset, &Zero, sizeof( unsigned int ) );
-			memcpy( &Stream.SequenceNumber, &m_SequenceNumber,
-				sizeof( uint64_t ) );
-			memcpy( Stream.Data, g_pJPEGBuffer, BytesLeft );
-			memcpy( Buffer.Data, &Stream, sizeof( Stream ) );
-
-			if( ( NumBytes = sendto( m_Socket, &Buffer,
-				BytesLeft, 0, ( struct sockaddr * )&RemoteAddress,
-				AddressLength ) ) == -1 )
-			{
-				printf( "Failed to send leftovers\n" );
-			}
-			else
-			{
-				printf( "Leftovers sent\n" );
-			}
-
-			// Assume the packet went through...
-			--PacketsLeft;
-		}
-
-		printf( "Bytes to go: %d\n", BytesToGo );
-
-		while( BytesToGo > 0 )
-		{
-			Buffer.ID =
-				( BufferPos / ( sizeof( Buffer ) - IMAGE_DATA_HEADER ) ) +
-				( ( BufferPos % ( sizeof( Buffer ) - IMAGE_DATA_HEADER ) ) ? 1:
-				0 );
-			Stream.Offset = htonl( BufferPos );
-			memcpy( Stream.Data, g_pJPEGBuffer + BufferPos,
-				MAX_BUFFER_LENGTH - PACKET_HEADER );
-			memcpy( Buffer.Data, &Stream, sizeof( Stream ) );
-
-			BytesToGo -= ( MAX_BUFFER_LENGTH - PACKET_HEADER );
-			BufferPos += ( MAX_BUFFER_LENGTH - PACKET_HEADER );
-
-			printf( "Bytes to go:     %d\n", BytesToGo );
-			printf( "Buffer position: %d\n", BufferPos );
-
-			if( ( NumBytes = sendto( m_Socket, &Stream,
-				MAX_BUFFER_LENGTH, 0,
-				( struct sockaddr * )&RemoteAddress, AddressLength ) ) == -1 )
-			{
-				printf( "Failed to send data: %s\n", strerror( errno ) );
-			}
-			else
-			{
-			}
-
-			// Assume the packet went through...
-			--PacketsLeft;
-		}
-
-		printf( "Packets remaining: %d\n", PacketsLeft );
-	}
-	++m_SequenceNumber;
-	printf( "Sequence Number: %llu\n", m_SequenceNumber );*/
-	/*	
-		for( int i = 0; i < BLOCK_COLUMNS*BLOCK_ROWS; ++i )
-		{
-			ImagePacket TmpPkt;
-			int BufferOffset = 0;
-			memset( &TmpPkt, 0, sizeof( TmpPkt ) );
-			TmpPkt.BlockIndex = htonl( i );
-
-			int BytesRemaining =
-				( BLOCK_SIZE*BLOCK_SIZE*IMAGE_CHANNELS );
-			const int BytesLeft =
-				BytesRemaining %( sizeof( ImagePacket )-PACKET_HEADER );
-
-			if( BytesLeft )
-			{
-				memcpy( TmpPkt.Data, g_Block[ i ], BytesLeft );
-				TmpPkt.Offset = htonl( 0 );
-
-				if( ( NumBytes = sendto( m_Socket, &TmpPkt,
-					BytesLeft, 0, ( struct sockaddr * )&RemoteAddress,
-					AddressLength ) ) == -1 )
-				{
-					printf( "Failed to send leftovers\n" );
-				}
-
-				BufferOffset += BytesLeft;
-				BytesRemaining -= BytesLeft;
-			}
-
-			while( BytesRemaining > 0 )
-			{
-				TmpPkt.Offset = htonl( BufferOffset );
-
-				memcpy( TmpPkt.Data, g_Block[ i ] + BufferOffset,
-					sizeof( ImagePacket ) - PACKET_HEADER );
-
-				if( ( NumBytes = sendto( m_Socket, &TmpPkt,
-					sizeof( ImagePacket ), 0,
-					( struct sockaddr * )&RemoteAddress, AddressLength ) ) ==
-						-1 )
-				{
-					printf( "Failed to send data\n" );
-				}
-
-				BufferOffset += ( sizeof( ImagePacket ) - PACKET_HEADER );
-				BytesRemaining -= ( sizeof( ImagePacket ) - PACKET_HEADER );
-			}
-		}*/
-	//}
+	// Still need to extract the framebuffer and turn it into a JPEG
 }
 
 int VirtualWindow::AddView( RenderView &p_View )
